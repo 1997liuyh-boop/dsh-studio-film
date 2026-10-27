@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "name": "dsh-studio-film",
+  "version": "0.1.0",
+  "kind": "studio",
+  "packages": [
+    {
+      "id": "film",
+      "path": "studios/film"
+    }
+  ]
+}

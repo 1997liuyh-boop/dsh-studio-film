@@ -1,0 +1,957 @@
+diff --git a/admin/src/App.tsx b/admin/src/App.tsx
+index 2659b25..2bed54f 100644
+--- a/admin/src/App.tsx
++++ b/admin/src/App.tsx
+@@ -1,4 +1,5 @@
+ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
++import { isLocalAdminMode } from "@/lib/localStudioSession";
+ import { AdminLayout } from "@/components/layout/AdminLayout";
+ import { getCachedUser, getToken, isAdminUser } from "@/lib/auth";
+ import { AdjustRecordsPage } from "@/pages/AdjustRecordsPage";
+@@ -35,7 +36,7 @@ function RequireAdmin() {
+ export default function App() {
+   return (
+     <Routes>
+-      <Route path="/login" element={<LoginPage />} />
++      <Route path="/login" element={isLocalAdminMode() ? <Navigate to="/settings" replace /> : <LoginPage />} />
+       <Route element={<RequireAdmin />}>
+         <Route element={<AdminLayout />}>
+           <Route index element={<DashboardPage />} />
+diff --git a/admin/src/components/layout/AdminLayout.tsx b/admin/src/components/layout/AdminLayout.tsx
+index 8d53fbd..b4bc504 100644
+--- a/admin/src/components/layout/AdminLayout.tsx
++++ b/admin/src/components/layout/AdminLayout.tsx
+@@ -41,6 +41,7 @@ import {
+ } from "lucide-react";
+ 
+ import { clearAuth, getCachedUser } from "@/lib/auth";
++import { isLocalAdminMode } from "@/lib/localStudioSession";
+ 
+ import { cn } from "@/lib/utils";
+ 
+@@ -326,11 +327,11 @@ export function AdminLayout() {
+ 
+           )}
+ 
+-          <button type="button" className="admin-icon-btn !text-[rgba(240,245,242,0.55)] hover:!text-[#e8f0eb]" onClick={handleLogout} title="退出登录">
++          {!isLocalAdminMode() && <button type="button" className="admin-icon-btn" onClick={handleLogout} title="退出登录">
+ 
+             <LogOut className="h-4 w-4" />
+ 
+-          </button>
++          </button>}
+ 
+         </div>
+ 
+diff --git a/admin/src/main.tsx b/admin/src/main.tsx
+index 9def58a..35482fa 100644
+--- a/admin/src/main.tsx
++++ b/admin/src/main.tsx
+@@ -3,13 +3,14 @@ import { createRoot } from "react-dom/client";
+ import { BrowserRouter } from "react-router-dom";
+ import { Toaster } from "sonner";
+ import App from "./App";
++import LocalStudioSession from "./components/layout/LocalStudioSession";
+ import "./index.css";
+ 
+ createRoot(document.getElementById("root")!).render(
+   <StrictMode>
+-    <BrowserRouter>
++    <LocalStudioSession><BrowserRouter>
+       <App />
+       <Toaster richColors position="top-right" />
+-    </BrowserRouter>
++    </BrowserRouter></LocalStudioSession>
+   </StrictMode>,
+ );
+diff --git a/admin/vite.config.ts b/admin/vite.config.ts
+index 0688943..4aa10ab 100644
+--- a/admin/vite.config.ts
++++ b/admin/vite.config.ts
+@@ -6,7 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
+ 
+ const rootDir = path.dirname(fileURLToPath(import.meta.url));
+ 
+-// Vite config: React + Tailwind, admin on 5174 with /api proxy
++// 管理后台通过显式配置的 API 来源代理请求。
+ export default defineConfig({
+   plugins: [react(), tailwindcss()],
+   resolve: {
+@@ -18,11 +18,11 @@ export default defineConfig({
+     port: 5174,
+     proxy: {
+       "/api": {
+-        target: "http://127.0.0.1:8000",
++        target: process.env.PRINTFILM_API_ORIGIN ?? "http://127.0.0.1:8000",
+         changeOrigin: true,
+       },
+       "/static": {
+-        target: "http://127.0.0.1:8000",
++        target: process.env.PRINTFILM_API_ORIGIN ?? "http://127.0.0.1:8000",
+         changeOrigin: true,
+       },
+     },
+diff --git a/backend/app/api/auth.py b/backend/app/api/auth.py
+index e5dc86d..9d3df5b 100644
+--- a/backend/app/api/auth.py
++++ b/backend/app/api/auth.py
+@@ -1,4 +1,4 @@
+-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
++from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, Request, Response, status
+ from pathlib import Path
+ 
+ from sqlalchemy.ext.asyncio import AsyncSession
+@@ -17,6 +17,7 @@ from app.schemas import (
+     TokenResponse,
+     UserOut,
+ )
++from app.services.local_studio import get_local_studio_user, require_local_studio_request
+ from app.services import storage
+ from app.services.auth import (
+     create_access_token,
+@@ -36,6 +37,21 @@ router = APIRouter(prefix="/auth", tags=["auth"])
+ settings = get_settings()
+ 
+ 
++@router.get("/session-mode")
++async def session_mode(response: Response) -> dict[str, bool]:
++    """前端启动前读取模式，避免先展示登录页再跳转。"""
++    response.headers["Cache-Control"] = "no-store"
++    return {"local_single_user": settings.studio_single_user}
++
++
++@router.post("/local-session", response_model=TokenResponse)
++async def local_session(request: Request, response: Response, db: AsyncSession = Depends(get_db)) -> TokenResponse:
++    require_local_studio_request(request)
++    user = await get_local_studio_user(db)
++    response.headers["Cache-Control"] = "no-store"
++    return TokenResponse(access_token=create_access_token(str(user.id)))
++
++
+ @router.post("/register", response_model=TokenResponse)
+ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)) -> TokenResponse:
+     existing = await get_user_by_email(db, body.email)
+diff --git a/backend/app/config.py b/backend/app/config.py
+index 1c75a32..5e416ab 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -20,6 +20,10 @@ class Settings(BaseSettings):
+     sql_echo: bool = False
+     secret_key: str = "dev-secret-change-me"
+     access_token_expire_minutes: int = 60 * 24 * 7
++    # 工作室启动器显式启用本机单用户；原部署仍使用账号登录。
++    studio_single_user: bool = False
++    studio_local_user_id: int | None = None
++    studio_local_origins: str = ""
+ 
+     database_url: str = "postgresql+asyncpg://printfilm:change-me-strong-db-password@127.0.0.1:15432/printfilm"
+     database_url_sync: str = "postgresql+psycopg2://printfilm:change-me-strong-db-password@127.0.0.1:15432/printfilm"
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 6034ac8..adfe5c0 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -29,14 +29,16 @@ import CanvasPage from './pages/drama/canvas/CanvasPage'
+ import EpisodeStoryboardPage from './pages/drama/episodeCanvas/EpisodeStoryboardPage'
+ import './styles/printfilm.css'
+ import './App.css'
++import { isStudioEmbedded } from './lib/studioEmbed'
++import { isLocalSingleUserMode } from './lib/localStudioSession'
+ 
+ export default function App() {
+   return (
+     <BrowserRouter>
+       <Routes>
+-        <Route path="/" element={<HomePage />} />
++        <Route path="/" element={isLocalSingleUserMode() ? <Navigate to="/drama" replace /> : <HomePage />} />
+         <Route path="/method" element={<MethodPage />} />
+-        <Route path="/auth" element={<AuthPage />} />
++        <Route path="/auth" element={isLocalSingleUserMode() ? <Navigate to="/drama" replace /> : <AuthPage />} />
+         <Route path="/templates" element={<TemplatesPage />} />
+         <Route path="/tools" element={<ToolsPage />} />
+         <Route path="/tools/:toolId" element={<ToolDetailPage />} />
+@@ -67,7 +69,7 @@ export default function App() {
+         <Route path="/drama/projects/:projectId/canvas" element={<CanvasPage />} />
+         <Route path="*" element={<Navigate to="/" replace />} />
+       </Routes>
+-      <WeChatGroupFab />
++      {!isStudioEmbedded && <WeChatGroupFab />}
+       <DramaGenQueuePanel />
+       <BillingAlertHost />
+       <DialogHost />
+diff --git a/frontend/src/components/layout/AppShell.tsx b/frontend/src/components/layout/AppShell.tsx
+index 88a376f..42726c3 100644
+--- a/frontend/src/components/layout/AppShell.tsx
++++ b/frontend/src/components/layout/AppShell.tsx
+@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
+ import { Link } from 'react-router-dom'
+ import { useI18n } from '../../i18n'
+ import { GITHUB_REPO_URL } from '../../lib/siteLinks'
++import { isStudioEmbedded } from '../../lib/studioEmbed'
+ import SiteNav, { type NavActive } from './SiteNav'
+ 
+ type Props = {
+@@ -22,7 +23,7 @@ export default function AppShell({ children, active, wide, flush, hideFooter }:
+       <main className={['pf-shell-main', wide ? 'wide' : '', flush ? 'flush' : ''].filter(Boolean).join(' ')}>
+         {children}
+       </main>
+-      {!hideFooter && !flush ? (
++      {!isStudioEmbedded && !hideFooter && !flush ? (
+         <footer className="pf-shell-footer">
+           <nav className="pf-shell-footer-links" aria-label={t('footer.links')}>
+             <Link to="/terms">{t('footer.terms')}</Link>
+diff --git a/frontend/src/components/layout/SiteNav.tsx b/frontend/src/components/layout/SiteNav.tsx
+index 52efdfa..6ecfacd 100644
+--- a/frontend/src/components/layout/SiteNav.tsx
++++ b/frontend/src/components/layout/SiteNav.tsx
+@@ -11,6 +11,7 @@ import { USER_UPDATED_EVENT } from '../../lib/userEvents'
+ import { GITHUB_REPO_URL } from '../../lib/siteLinks'
+ import { useI18n } from '../../i18n'
+ import LanguageSwitch from './LanguageSwitch'
++import { isStudioEmbedded } from '../../lib/studioEmbed'
+ 
+ export type NavActive = 'home' | 'drama' | 'kepu' | 'tools' | 'assets' | 'pricing' | 'templates' | 'studio' | 'history'
+ 
+@@ -73,7 +74,7 @@ export default function SiteNav({ active }: Props) {
+   // 未登录去登录；已登录弹出漫剧/科普选择
+   function goCreate() {
+     if (!user && !localStorage.getItem('token')) {
+-      nav('/auth?next=/')
++      nav(isStudioEmbedded ? '/auth?next=/drama' : '/auth?next=/')
+       return
+     }
+     setCreateOpen(true)
+@@ -81,7 +82,13 @@ export default function SiteNav({ active }: Props) {
+ 
+   const isActive = (key: NavActive) => (current === key ? 'active' : undefined)
+ 
+-  const centerLinks = (
++  const centerLinks = isStudioEmbedded ? (
++    <>
++      <NavLink to="/drama" end>{t('nav.workbench')}</NavLink>
++      <NavLink to="/drama/assets">{t('nav.assets')}</NavLink>
++      <NavLink to="/settings">{t('nav.profile')}</NavLink>
++    </>
++  ) : (
+     <>
+       <NavLink to="/" end className={() => isActive('home')}>
+         {t('nav.workbench')}
+@@ -107,14 +114,14 @@ export default function SiteNav({ active }: Props) {
+   return (
+     <header className="pf-nav">
+       <div className="pf-nav-left">
+-        <BrandMark />
++        <BrandMark to={isStudioEmbedded ? '/drama' : '/'} />
+       </div>
+       <nav className="pf-nav-center" aria-label={t('nav.main')}>
+         {centerLinks}
+       </nav>
+       <div className="pf-nav-right">
+-        <LanguageSwitch />
+-        <a
++        {!isStudioEmbedded && <LanguageSwitch />}
++        {!isStudioEmbedded && <a
+           className="pf-nav-github"
+           href={GITHUB_REPO_URL}
+           target="_blank"
+@@ -124,11 +131,11 @@ export default function SiteNav({ active }: Props) {
+         >
+           <IconGithub size={18} />
+           <span>{t('nav.github')}</span>
+-        </a>
+-        <button type="button" className="pf-nav-help-btn" title={t('nav.helpCenter')} onClick={() => nav('/help')}>
++        </a>}
++        {!isStudioEmbedded && <button type="button" className="pf-nav-help-btn" title={t('nav.helpCenter')} onClick={() => nav('/help')}>
+           <IconHelp size={18} className="pf-nav-help-icon" />
+           <span>{t('nav.help')}</span>
+-        </button>
++        </button>}
+         {user ? (
+           <button
+             type="button"
+@@ -139,13 +146,13 @@ export default function SiteNav({ active }: Props) {
+             <UserAvatar user={user} size="sm" />
+           </button>
+         ) : (
+-          <Link to="/auth?next=/" className="pf-link pf-nav-login">
++          <Link to={isStudioEmbedded ? '/auth?next=/drama' : '/auth?next=/'} className="pf-link pf-nav-login">
+             {t('nav.login')}
+           </Link>
+         )}
+-        <Button variant="lime" size="sm" icon onClick={goCreate}>
++        {!isStudioEmbedded && <Button variant="lime" size="sm" icon onClick={goCreate}>
+           {t('nav.startCreate')}
+-        </Button>
++        </Button>}
+         <button
+           type="button"
+           className="pf-nav-burger"
+@@ -162,9 +169,9 @@ export default function SiteNav({ active }: Props) {
+         <div className="pf-nav-drawer" role="dialog" aria-label={t('nav.mobileNav')}>
+           <nav className="pf-nav-drawer-links">
+             {centerLinks}
+-            <a href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
++            {!isStudioEmbedded && <a href={GITHUB_REPO_URL} target="_blank" rel="noopener noreferrer">
+               {t('nav.github')}
+-            </a>
++            </a>}
+           </nav>
+         </div>
+       ) : null}
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index af4fdfb..1594bbc 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -1,13 +1,14 @@
+ import { StrictMode } from 'react'
+ import { createRoot } from 'react-dom/client'
+ import App from './App'
++import LocalStudioSession from './components/layout/LocalStudioSession'
+ import { I18nProvider } from './i18n'
+ import './index.css'
+ 
+ createRoot(document.getElementById('root')!).render(
+   <StrictMode>
+     <I18nProvider>
+-      <App />
++      <LocalStudioSession><App /></LocalStudioSession>
+     </I18nProvider>
+   </StrictMode>,
+ )
+diff --git a/frontend/src/pages/SettingsPage.tsx b/frontend/src/pages/SettingsPage.tsx
+index f85209c..391d327 100644
+--- a/frontend/src/pages/SettingsPage.tsx
++++ b/frontend/src/pages/SettingsPage.tsx
+@@ -12,6 +12,8 @@ import ChangePasswordCard from './settings/ChangePasswordCard'
+ import ComingSoon from '../components/ui/ComingSoon'
+ import { dramaProjectEntryPath, formatDramaCardMeta } from '../lib/dramaWorkflow'
+ import { STATUS_CN } from '../lib/status'
++import { isStudioEmbedded } from '../lib/studioEmbed'
++import { isLocalSingleUserMode } from '../lib/localStudioSession'
+ import SettingsToolRunsPanel from './SettingsToolRunsPanel'
+ import { formatDateTime, useI18n } from '../i18n'
+ 
+@@ -56,6 +58,7 @@ const TAB_IDS = new Set(SIDE_ITEMS.map((i) => i.id))
+ 
+ // 解析 URL tab，非法时回落到账号信息
+ function parseTab(raw: string | null): SettingsTab {
++  if (raw === 'security' && isLocalSingleUserMode()) return 'account'
+   if (raw && TAB_IDS.has(raw as SettingsTab)) return raw as SettingsTab
+   return 'account'
+ }
+@@ -79,6 +82,8 @@ export default function SettingsPage() {
+    * listLoading 列表加载中
+    */
+   const [tab, setTab] = useState<SettingsTab>(() => parseTab(params.get('tab')))
++  const commonTabs: SettingsTab[] = isLocalSingleUserMode() ? ['account', 'projects'] : ['account', 'projects', 'security']
++  const [showAdvanced, setShowAdvanced] = useState(!isStudioEmbedded || !commonTabs.includes(tab))
+   const [user, setUser] = useState<User | null>(null)
+   const [wallet, setWallet] = useState<Wallet | null>(null)
+   const [dramaItems, setDramaItems] = useState<DramaProjectListItem[]>([])
+@@ -158,7 +163,7 @@ export default function SettingsPage() {
+             </div>
+           </div>
+           <nav className="pf-settings-nav" aria-label={t('settings.nav')}>
+-            {SIDE_ITEMS.map((item) => (
++            {SIDE_ITEMS.filter(item => (!isLocalSingleUserMode() || item.id !== 'security') && (showAdvanced || commonTabs.includes(item.id))).map((item) => (
+               <button
+                 key={item.id}
+                 type="button"
+@@ -169,10 +174,14 @@ export default function SettingsPage() {
+                 {item.soon ? <ComingSoon /> : null}
+               </button>
+             ))}
++            {isStudioEmbedded && <button type="button" aria-expanded={showAdvanced} onClick={() => {
++              if (showAdvanced && !commonTabs.includes(tab)) { setTab('account'); setParams({ tab: 'account' }) }
++              setShowAdvanced(value => !value)
++            }}>{showAdvanced ? '收起高级设置' : '高级设置'}</button>}
+           </nav>
+-          <button type="button" className="pf-btn pf-btn-ghost pf-btn-sm pf-settings-logout" onClick={logout}>
++          {!isLocalSingleUserMode() && <button type="button" className="pf-btn pf-btn-ghost pf-btn-sm pf-settings-logout" onClick={logout}>
+             {t('settings.logout')}
+-          </button>
++          </button>}
+         </aside>
+ 
+         <main className="pf-settings-main">
+diff --git a/frontend/src/pages/drama/RequireAuth.tsx b/frontend/src/pages/drama/RequireAuth.tsx
+index 7c24e0f..150bbbb 100644
+--- a/frontend/src/pages/drama/RequireAuth.tsx
++++ b/frontend/src/pages/drama/RequireAuth.tsx
+@@ -6,7 +6,7 @@ export default function RequireAuth({ children }: { children: ReactNode }) {
+   const location = useLocation()
+   const token = localStorage.getItem('token')
+   if (!token) {
+-    return <Navigate to="/auth" replace state={{ from: location.pathname }} />
++    return <Navigate to={'/auth?next=' + encodeURIComponent(location.pathname + location.search)} replace state={{ from: location.pathname }} />
+   }
+   return children
+ }
+diff --git a/backend/app/services/local_studio.py b/backend/app/services/local_studio.py
+new file mode 100644
+index 0000000..8133a53
+--- /dev/null
++++ b/backend/app/services/local_studio.py
+@@ -0,0 +1,81 @@
++"""本机工作室会话：固定用户身份，业务接口继续使用原 JWT 鉴权。"""
++from ipaddress import ip_address
++from secrets import token_urlsafe
++from urllib.parse import urlsplit
++from uuid import uuid4
++
++from fastapi import HTTPException, Request
++from sqlalchemy import select, text
++from sqlalchemy.ext.asyncio import AsyncSession
++
++from app.config import get_settings
++from app.models import User
++from app.models_settings import AppSettings
++from app.services.auth import hash_password
++
++
++def require_local_studio_request(request: Request) -> None:
++    """仅允许本机应用来源领取会话，拒绝远程来源和伪造的宿主地址。"""
++    settings = get_settings()
++    if not settings.studio_single_user:
++        raise HTTPException(status_code=404, detail="本地单用户模式未启用")
++    try:
++        local_peer = request.client is not None and ip_address(request.client.host).is_loopback
++    except ValueError:
++        local_peer = False
++    origins = {settings.public_base_url.rstrip("/")}
++    origins.update(value.strip().rstrip("/") for value in settings.studio_local_origins.split(",") if value.strip())
++    origin = request.headers.get("origin", "")
++    parsed = urlsplit(origin)
++    local_hosts = {"127.0.0.1", "localhost", "::1"}
++    if (
++        not local_peer
++        or request.url.hostname not in local_hosts
++        or parsed.scheme not in {"http", "https"}
++        or parsed.hostname not in local_hosts
++        or parsed.path
++        or parsed.query
++        or parsed.fragment
++        or origin not in origins
++        or request.headers.get("x-printfilm-local") != "1"
++    ):
++        raise HTTPException(status_code=403, detail="仅允许本机工作室建立会话")
++
++
++async def get_local_studio_user(db: AsyncSession) -> User:
++    """单独保存本机身份绑定，保留已有用户、项目及默认模型配置。"""
++    settings = get_settings()
++    # 事务锁覆盖首次创建和绑定写入，多个窗口同时打开也使用同一个账号。
++    await db.execute(text("SELECT pg_advisory_xact_lock(1347634771)"))
++    binding = await db.get(AppSettings, "studio-local")
++    user_id = settings.studio_local_user_id
++    if user_id is None and binding is not None:
++        user_id = (binding.config_json or {}).get("user_id")
++        if type(user_id) is not int:
++            raise HTTPException(status_code=409, detail="本机账号绑定无效，请检查工作室配置")
++    if user_id is not None:
++        user = await db.get(User, user_id)
++        if user is None:
++            raise HTTPException(status_code=409, detail="本机绑定账号不存在，请检查 STUDIO_LOCAL_USER_ID")
++    else:
++        result = await db.execute(select(User).order_by(User.id).limit(2))
++        users = list(result.scalars())
++        if len(users) > 1:
++            raise HTTPException(status_code=409, detail="检测到多个账号，请通过 STUDIO_LOCAL_USER_ID 指定本机账号")
++        user = users[0] if users else User(
++            email="local-" + uuid4().hex + "@example.com",
++            nickname="本机工作室",
++            hashed_password=hash_password(token_urlsafe(32)),
++            role="admin",
++            quota_left=settings.new_user_quota,
++            balance_fen=0,
++        )
++        if not users:
++            db.add(user)
++            await db.flush()
++    if binding is None:
++        db.add(AppSettings(id="studio-local", config_json={"user_id": user.id}))
++    elif (binding.config_json or {}).get("user_id") != user.id:
++        binding.config_json = {"user_id": user.id}
++    await db.commit()
++    return user
+diff --git a/backend/tests/test_local_studio_mode.py b/backend/tests/test_local_studio_mode.py
+new file mode 100644
+index 0000000..8279ae3
+--- /dev/null
++++ b/backend/tests/test_local_studio_mode.py
+@@ -0,0 +1,124 @@
++"""本机来源校验与固定账号选择的回归测试，不访问业务数据库。"""
++import unittest
++from types import SimpleNamespace
++from unittest.mock import AsyncMock, patch
++
++from fastapi import HTTPException
++from pydantic import EmailStr, TypeAdapter
++from starlette.requests import Request
++
++from app.models import User
++from app.models_settings import AppSettings
++from app.services.local_studio import get_local_studio_user, require_local_studio_request
++
++
++def local_settings(**changes):
++    values = dict(studio_single_user=True, public_base_url="http://127.0.0.1:33102", studio_local_user_id=None, studio_local_origins="", new_user_quota=5)
++    values.update(changes)
++    return SimpleNamespace(**values)
++
++
++def local_request(peer="127.0.0.1", host="127.0.0.1:33104", origin="http://127.0.0.1:33102", marker="1"):
++    return Request({"type": "http", "method": "POST", "scheme": "http", "path": "/api/auth/local-session", "query_string": b"", "server": ("127.0.0.1", 33104), "client": (peer, 40000), "headers": [(b"host", host.encode()), (b"origin", origin.encode()), (b"x-printfilm-local", marker.encode())]})
++
++
++class LocalRequestTests(unittest.TestCase):
++    def test_accepts_only_enabled_local_application(self):
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            require_local_studio_request(local_request())
++            require_local_studio_request(local_request(peer="::1"))
++
++    def test_explicit_local_admin_origin_is_allowed(self):
++        with patch("app.services.local_studio.get_settings", return_value=local_settings(studio_local_origins="http://127.0.0.1:33103")):
++            require_local_studio_request(local_request(origin="http://127.0.0.1:33103"))
++
++    def test_configured_remote_origin_remains_forbidden(self):
++        with patch("app.services.local_studio.get_settings", return_value=local_settings(studio_local_origins="https://remote.example")):
++            with self.assertRaises(HTTPException) as error:
++                require_local_studio_request(local_request(origin="https://remote.example"))
++            self.assertEqual(error.exception.status_code, 403)
++
++    def test_disabled_mode_has_no_session_entry(self):
++        with patch("app.services.local_studio.get_settings", return_value=local_settings(studio_single_user=False)):
++            with self.assertRaises(HTTPException) as error:
++                require_local_studio_request(local_request())
++            self.assertEqual(error.exception.status_code, 404)
++
++    def test_rejects_remote_peer_wrong_origin_host_and_missing_marker(self):
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            for changes in [dict(peer="192.168.1.9"), dict(peer="invalid"), dict(host="attacker.example:33104"), dict(origin="https://attacker.example"), dict(origin="http://127.0.0.1:39999"), dict(origin="null"), dict(origin=""), dict(marker="")]:
++                with self.subTest(changes=changes), self.assertRaises(HTTPException) as error:
++                    require_local_studio_request(local_request(**changes))
++                self.assertEqual(error.exception.status_code, 403)
++
++
++class LocalIdentityTests(unittest.IsolatedAsyncioTestCase):
++    def make_database(self, binding=None, users=()):
++        db = SimpleNamespace(get=AsyncMock(return_value=binding), execute=AsyncMock(return_value=SimpleNamespace(scalars=lambda: iter(users))), flush=AsyncMock(), commit=AsyncMock(), added=[])
++        def add(row):
++            if isinstance(row, User):
++                row.id = 41
++            db.added.append(row)
++        db.add = add
++        return db
++
++    async def test_empty_database_creates_one_owner_and_durable_binding(self):
++        db = self.make_database()
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()), patch("app.services.local_studio.hash_password", return_value="random-hash"):
++            user = await get_local_studio_user(db)
++        self.assertEqual(user.id, 41)
++        TypeAdapter(EmailStr).validate_python(user.email)
++        self.assertEqual(user.role, "admin")
++        self.assertEqual(user.hashed_password, "random-hash")
++        self.assertEqual(len(db.added), 2)
++        self.assertEqual(db.added[1].id, "studio-local")
++        self.assertEqual(db.added[1].config_json, {"user_id": 41})
++        db.commit.assert_awaited_once()
++
++    async def test_reuses_sole_existing_user_without_changing_role_or_data(self):
++        user = SimpleNamespace(id=18, role="user")
++        db = self.make_database(users=[user])
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            self.assertIs(await get_local_studio_user(db), user)
++        self.assertEqual(user.role, "user")
++        self.assertEqual(len(db.added), 1)
++        self.assertIsInstance(db.added[0], AppSettings)
++
++    async def test_binding_survives_profile_email_change_and_other_users(self):
++        user = SimpleNamespace(id=18, email="changed@example.com")
++        db = self.make_database()
++        db.get.side_effect = [AppSettings(id="studio-local", config_json={"user_id": 18}), user]
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            self.assertIs(await get_local_studio_user(db), user)
++        self.assertEqual(db.added, [])
++        self.assertEqual(db.execute.await_count, 1)
++
++    async def test_multiple_accounts_require_explicit_selection(self):
++        db = self.make_database(users=[SimpleNamespace(id=1), SimpleNamespace(id=2)])
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            with self.assertRaises(HTTPException) as error:
++                await get_local_studio_user(db)
++        self.assertEqual(error.exception.status_code, 409)
++        db.commit.assert_not_awaited()
++        self.assertEqual(db.added, [])
++
++    async def test_configured_account_is_bound_without_merging_accounts(self):
++        db = self.make_database()
++        user = SimpleNamespace(id=22)
++        db.get.side_effect = [None, user]
++        with patch("app.services.local_studio.get_settings", return_value=local_settings(studio_local_user_id=22)):
++            self.assertIs(await get_local_studio_user(db), user)
++        self.assertEqual(db.added[0].config_json, {"user_id": 22})
++
++    async def test_deleted_binding_account_does_not_create_replacement(self):
++        db = self.make_database()
++        db.get.side_effect = [AppSettings(id="studio-local", config_json={"user_id": 18}), None]
++        with patch("app.services.local_studio.get_settings", return_value=local_settings()):
++            with self.assertRaises(HTTPException) as error:
++                await get_local_studio_user(db)
++        self.assertEqual(error.exception.status_code, 409)
++        self.assertEqual(db.added, [])
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/frontend/src/lib/studioEmbed.ts b/frontend/src/lib/studioEmbed.ts
+new file mode 100644
+index 0000000..334c143
+--- /dev/null
++++ b/frontend/src/lib/studioEmbed.ts
+@@ -0,0 +1,5 @@
++/** 嵌入标记仅用于精简界面，同一窗口内导航和刷新后继续保留。 */
++const parameters = new URLSearchParams(window.location.search)
++const framed = window.self !== window.top
++if (framed && parameters.get('embed') === 'studio') sessionStorage.setItem('printfilm.studioEmbed', '1')
++export const isStudioEmbedded = framed && sessionStorage.getItem('printfilm.studioEmbed') === '1'
+diff --git a/frontend/src/lib/localStudioSession.ts b/frontend/src/lib/localStudioSession.ts
+new file mode 100644
+index 0000000..cccef05
+--- /dev/null
++++ b/frontend/src/lib/localStudioSession.ts
+@@ -0,0 +1,32 @@
++import { API_BASE } from '../api/client'
++
++let localSingleUser = false
++let preparation: Promise<void> | undefined
++
++export function isLocalSingleUserMode() {
++  return localSingleUser
++}
++
++async function requestSession() {
++  const mode = await fetch(API_BASE + '/api/auth/session-mode', { cache: 'no-store', signal: AbortSignal.timeout(10000) })
++  if (!mode.ok) throw new Error('无法读取工作台运行模式，请检查本机服务。')
++  const status = await mode.json()
++  if (status.local_single_user !== true) return
++  const response = await fetch(API_BASE + '/api/auth/local-session', {
++    method: 'POST', cache: 'no-store', signal: AbortSignal.timeout(10000), headers: { 'X-Printfilm-Local': '1' },
++  })
++  if (!response.ok) {
++    const error = await response.json().catch(() => null)
++    throw new Error(typeof error?.detail === 'string' ? error.detail : '本机工作台会话建立失败，请重试。')
++  }
++  const session = await response.json()
++  if (typeof session.access_token !== 'string' || !session.access_token) throw new Error('本机服务未返回有效会话。')
++  localStorage.setItem('token', session.access_token)
++  localSingleUser = true
++}
++
++/** 启动时统一准备会话，开发模式重复挂载也只发起一次请求，失败后允许重试。 */
++export function prepareLocalStudioSession() {
++  preparation ??= requestSession().catch(error => { preparation = undefined; throw error })
++  return preparation
++}
+diff --git a/frontend/src/components/layout/LocalStudioSession.tsx b/frontend/src/components/layout/LocalStudioSession.tsx
+new file mode 100644
+index 0000000..ddc8769
+--- /dev/null
++++ b/frontend/src/components/layout/LocalStudioSession.tsx
+@@ -0,0 +1,21 @@
++import { useEffect, useState, type ReactNode } from 'react'
++import { prepareLocalStudioSession } from '../../lib/localStudioSession'
++
++/** 在路由和业务请求挂载前取得本机会话，避免登录页闪现与匿名请求。 */
++export default function LocalStudioSession({ children }: { children: ReactNode }) {
++  const [ready, setReady] = useState(false)
++  const [error, setError] = useState('')
++  const [attempt, setAttempt] = useState(0)
++  useEffect(() => {
++    let active = true
++    prepareLocalStudioSession().then(() => { if (active) setReady(true) }).catch(error => {
++      if (active) setError(error instanceof Error ? error.message : '工作台暂时无法连接。')
++    })
++    return () => { active = false }
++  }, [attempt])
++  if (ready) return children
++  return <main className="auth-shell"><section className="auth-panel" aria-live="polite">
++    <h1>{error ? '工作台连接失败' : '正在打开工作台'}</h1>
++    {error && <><p role="alert">{error}</p><button type="button" className="pf-btn pf-btn-primary" onClick={() => { setError(''); setAttempt(value => value + 1) }}>重新连接</button></>}
++  </section></main>
++}
+diff --git a/admin/src/lib/localStudioSession.ts b/admin/src/lib/localStudioSession.ts
+new file mode 100644
+index 0000000..35fc26a
+--- /dev/null
++++ b/admin/src/lib/localStudioSession.ts
+@@ -0,0 +1,31 @@
++import { setCachedUser, setToken, type AdminUser } from './auth'
++
++let localAdmin = false
++let preparation: Promise<void> | undefined
++
++export function isLocalAdminMode() {
++  return localAdmin
++}
++
++async function prepare() {
++  const mode = await fetch('/api/auth/session-mode', { cache: 'no-store', signal: AbortSignal.timeout(10000) })
++  if (!mode.ok) throw new Error('无法连接本机模型管理服务。')
++  if ((await mode.json()).local_single_user !== true) return
++  const session = await fetch('/api/auth/local-session', { method: 'POST', cache: 'no-store', headers: { 'X-Printfilm-Local': '1' }, signal: AbortSignal.timeout(10000) })
++  if (!session.ok) throw new Error('本机管理会话建立失败，请重试。')
++  const result = await session.json()
++  if (typeof result.access_token !== 'string' || !result.access_token) throw new Error('本机服务未返回有效会话。')
++  const profile = await fetch('/api/auth/me', { headers: { Authorization: 'Bearer ' + result.access_token }, cache: 'no-store', signal: AbortSignal.timeout(10000) })
++  if (!profile.ok) throw new Error('无法读取本机账号资料。')
++  const user: AdminUser = await profile.json()
++  // 复用的已有账号仍遵循原管理员权限，不自动提升权限。
++  if (user.role !== 'admin') return
++  setToken(result.access_token)
++  setCachedUser(user)
++  localAdmin = true
++}
++
++export function prepareLocalAdminSession() {
++  preparation ??= prepare().catch(error => { preparation = undefined; throw error })
++  return preparation
++}
+diff --git a/admin/src/components/layout/LocalStudioSession.tsx b/admin/src/components/layout/LocalStudioSession.tsx
+new file mode 100644
+index 0000000..fad3a61
+--- /dev/null
++++ b/admin/src/components/layout/LocalStudioSession.tsx
+@@ -0,0 +1,21 @@
++import { useEffect, useState, type ReactNode } from 'react'
++import { prepareLocalAdminSession } from '@/lib/localStudioSession'
++
++/** 模型管理页复用同一本机身份，其他部署继续使用原管理员登录。 */
++export default function LocalStudioSession({ children }: { children: ReactNode }) {
++  const [ready, setReady] = useState(false)
++  const [error, setError] = useState('')
++  const [attempt, setAttempt] = useState(0)
++  useEffect(() => {
++    let active = true
++    prepareLocalAdminSession().then(() => { if (active) setReady(true) }).catch(error => {
++      if (active) setError(error instanceof Error ? error.message : '本机服务暂不可用。')
++    })
++    return () => { active = false }
++  }, [attempt])
++  if (ready) return children
++  return <main className="grid min-h-screen place-items-center p-6"><section className="max-w-md space-y-4" aria-live="polite">
++    <h1 className="text-xl font-semibold">{error ? '模型管理暂未连接' : '正在打开模型管理'}</h1>
++    {error && <><p role="alert" className="text-sm">{error}</p><button type="button" className="rounded-md border px-4 py-2 text-sm" onClick={() => { setError(''); setAttempt(value => value + 1) }}>重新连接</button></>}
++  </section></main>
++}
+diff --git a/frontend/index.html b/frontend/index.html
+index 0619a70..ec8d184 100644
+--- a/frontend/index.html
++++ b/frontend/index.html
+@@ -15,6 +15,7 @@
+   </head>
+   <body>
+     <div id="root"></div>
++    <script src="/studioControl.js"></script>
+     <script type="module" src="/src/main.tsx"></script>
+   </body>
+ </html>
+diff --git a/frontend/public/studioControl.js b/frontend/public/studioControl.js
+new file mode 100644
+index 0000000..3fcbf65
+--- /dev/null
++++ b/frontend/public/studioControl.js
+@@ -0,0 +1,194 @@
++"use strict";
++(() => {
++  // D:/demo2/studio-library/packages/sdk/controlBridge.ts
++  (() => {
++    if (window.parent === window || window.__dshStudioControl) return;
++    window.__dshStudioControl = true;
++    const requestType = "dsh:studio:control";
++    const resultType = "dsh:studio:controlResult";
++    const controls = /* @__PURE__ */ new Map();
++    const seen = /* @__PURE__ */ new Set();
++    const cancelled = /* @__PURE__ */ new Set();
++    const allowedParents = /* @__PURE__ */ new Set([location.origin, "dsh-app://app"]);
++    const isLocal = (url) => ["http:", "https:"].includes(url.protocol) && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
++    try {
++      const parent = new URL(document.referrer);
++      if (isLocal(parent) && parent.port === "5173") allowedParents.add(parent.origin);
++    } catch {
++    }
++    const redact = (value) => value.replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[\u51ED\u636E\u5DF2\u9690\u85CF]").replace(/\b(?:sk-[\w-]+|[a-f0-9]{24,})\b/gi, "[\u51ED\u636E\u5DF2\u9690\u85CF]").slice(0, 12e3);
++    const visible = (node) => {
++      if (node.closest('[hidden],[inert],[aria-hidden="true"]')) return false;
++      if (getComputedStyle(node).pointerEvents === "none") return false;
++      for (let item = node; item; item = item.parentElement) {
++        const style = getComputedStyle(item);
++        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
++      }
++      return node.getClientRects().length > 0;
++    };
++    const label = (node) => {
++      const labelled = node.getAttribute("aria-labelledby")?.split(/\s+/).map((id) => document.getElementById(id)?.textContent ?? "").join(" ");
++      const field = node;
++      return (node.getAttribute("aria-label") || labelled || field.labels?.[0]?.textContent || node.getAttribute("placeholder") || node.getAttribute("title") || node.innerText || node.textContent || field.name || "").trim().replace(/\s+/g, " ").slice(0, 180);
++    };
++    const sensitive = (node) => node.matches('input[type="password"],input[type="file"]') || /密码|密钥|令牌|secret|token|api.?key|password/i.test(label(node) + " " + node.name + " " + node.id);
++    let generation = 0;
++    const pageId = crypto.randomUUID().slice(0, 8);
++    function snapshot(offset = 0) {
++      controls.clear();
++      generation += 1;
++      const nodes = [...document.querySelectorAll('button,a[href],input:not([type="hidden"]),textarea,select,summary,[role="button"],[role="tab"],[role="checkbox"],[contenteditable="true"],[tabindex]')].filter(visible);
++      const entries = nodes.slice(offset, offset + 100).map((node, index) => {
++        const id = pageId + "-c" + generation + "-" + (offset + index);
++        controls.set(id, node);
++        const input = node;
++        const secret = sensitive(node);
++        return {
++          id,
++          tag: node.tagName.toLowerCase(),
++          label: redact(label(node)),
++          type: input.type || node.getAttribute("role") || void 0,
++          disabled: node.matches(':disabled,[aria-disabled="true"]'),
++          sensitive: secret || void 0,
++          value: !secret && node.matches("input,textarea,select") ? redact(input.value) : void 0,
++          checked: node.matches('input[type="checkbox"],input[type="radio"]') ? input.checked : void 0,
++          selected: node.getAttribute("aria-pressed") ?? node.getAttribute("aria-selected") ?? (node.classList.contains("is-active") ? "true" : void 0),
++          options: node instanceof HTMLSelectElement ? [...node.options].slice(0, 80).map((option) => ({ value: option.value, label: redact(option.text), disabled: option.disabled })) : void 0
++        };
++      });
++      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
++      const text = [];
++      let length = 0;
++      while (walker.nextNode() && length < 12e3) {
++        const parent = walker.currentNode.parentElement;
++        if (!parent || parent.closest("script,style,noscript,input,textarea,[data-sensitive]") || !visible(parent)) continue;
++        const value = walker.currentNode.textContent?.trim();
++        if (value) {
++          text.push(value);
++          length += value.length;
++        }
++      }
++      const result = { title: document.title, path: location.pathname, text: redact(text.join("\n")), controls: entries, totalControls: nodes.length, nextOffset: offset + entries.length < nodes.length ? offset + entries.length : null };
++      while (JSON.stringify(result).length > 48e3 && entries.length > 1) entries.pop();
++      result.nextOffset = offset + entries.length < nodes.length ? offset + entries.length : null;
++      return result;
++    }
++    const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
++    async function perform(command) {
++      if (command.action === "open" || command.action === "read") return snapshot(command.offset ?? 0);
++      const node = command.target ? controls.get(command.target) : void 0;
++      if (command.target && (!node?.isConnected || !visible(node))) throw new Error("\u9875\u9762\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0 read \u83B7\u53D6\u63A7\u4EF6");
++      if (node?.matches(':disabled,[aria-disabled="true"]')) throw new Error("\u63A7\u4EF6\u5F53\u524D\u4E0D\u53EF\u7528");
++      if (node && sensitive(node)) throw new Error("\u654F\u611F\u8BBE\u7F6E\u8BF7\u7531\u7528\u6237\u5728\u9875\u9762\u4E2D\u64CD\u4F5C");
++      if (command.action === "scroll") {
++        const horizontal = ["left", "right"].includes(command.direction);
++        let container = node ?? document.elementFromPoint(innerWidth / 2, innerHeight / 2);
++        while (container && !(horizontal ? container.scrollWidth > container.clientWidth : container.scrollHeight > container.clientHeight)) container = container.parentElement;
++        container ??= document.scrollingElement;
++        const amount = ["up", "left"].includes(command.direction) ? -480 : 480;
++        container.scrollBy({ [horizontal ? "left" : "top"]: amount, behavior: "instant" });
++      } else {
++        if (!node) throw new Error("\u8BF7\u63D0\u4F9B\u6700\u8FD1 read \u8FD4\u56DE\u7684\u63A7\u4EF6 id");
++        node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
++        node.focus({ preventScroll: true });
++        if (command.action === "click") {
++          if (node instanceof HTMLAnchorElement && !["http:", "https:", "dsh-app:"].includes(new URL(node.href).protocol)) throw new Error("\u4E0D\u652F\u6301\u6B64\u94FE\u63A5\u7C7B\u578B");
++          node.click();
++        } else if (command.action === "fill") {
++          if (typeof command.value !== "string" || command.value.length > 8e3) throw new Error("\u8F93\u5165\u5185\u5BB9\u65E0\u6548");
++          if (node.matches('input:not([type="checkbox"]):not([type="radio"]),textarea') && !node.readOnly) {
++            const prototype = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
++            Object.getOwnPropertyDescriptor(prototype, "value").set.call(node, command.value);
++            node.dispatchEvent(new Event("input", { bubbles: true }));
++            node.dispatchEvent(new Event("change", { bubbles: true }));
++          } else if (node.isContentEditable) {
++            node.textContent = command.value;
++            node.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: command.value }));
++          } else throw new Error("\u8BE5\u63A7\u4EF6\u4E0D\u80FD\u586B\u5199\uFF0C\u8BF7\u4F7F\u7528 click \u6216 select");
++        } else if (command.action === "select" && node instanceof HTMLSelectElement) {
++          if (![...node.options].some((option) => option.value === command.value && !option.disabled)) throw new Error("\u9009\u9879\u4E0D\u5B58\u5728\u6216\u4E0D\u53EF\u7528");
++          Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(node, command.value);
++          node.dispatchEvent(new Event("input", { bubbles: true }));
++          node.dispatchEvent(new Event("change", { bubbles: true }));
++        } else throw new Error("\u4E0D\u652F\u6301\u6B64\u63A7\u4EF6\u64CD\u4F5C");
++      }
++      await delay(250);
++      return snapshot();
++    }
++    let busy = false;
++    window.addEventListener("message", async (event) => {
++      const data = event.data;
++      if (event.source !== window.parent || !allowedParents.has(event.origin) || ![requestType, "dsh:studio:controlCancel"].includes(data?.type) || typeof data.id !== "string" || !/^[a-f0-9-]{36}$/.test(data.id)) return;
++      if (data.type === "dsh:studio:controlCancel") {
++        if (cancelled.size >= 128) cancelled.delete(cancelled.values().next().value);
++        cancelled.add(data.id);
++        const frame = document.querySelector("iframe[data-studio-app]");
++        if (frame && isLocal(new URL(frame.src))) frame.contentWindow?.postMessage(data, new URL(frame.src).origin);
++        return;
++      }
++      const reply = (body) => window.parent.postMessage({ type: resultType, id: data.id, ...body }, event.origin);
++      if (data.action === "ping") {
++        reply({ ready: true });
++        return;
++      }
++      if (seen.has(data.id)) {
++        reply({ error: "\u64CD\u4F5C\u5DF2\u63A5\u6536\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u9875\u9762\uFF0C\u4E0D\u8981\u91CD\u590D\u63D0\u4EA4" });
++        return;
++      }
++      if (busy) {
++        reply({ error: "\u9875\u9762\u6B63\u5728\u6267\u884C\u53E6\u4E00\u4E2A\u64CD\u4F5C" });
++        return;
++      }
++      if (cancelled.has(data.id) || !Number.isFinite(data.expiresAt) || data.expiresAt < Date.now()) {
++        reply({ error: "\u64CD\u4F5C\u5DF2\u53D6\u6D88\u6216\u8FC7\u671F" });
++        return;
++      }
++      if (seen.size >= 128) seen.delete(seen.values().next().value);
++      seen.add(data.id);
++      busy = true;
++      try {
++        const deadline = Math.min(data.expiresAt - 1e3, Date.now() + 1e4);
++        const loading = () => document.readyState === "loading" || document.querySelector('[data-studio-loading="true"]') || [...document.querySelectorAll("#root,#app")].some((root) => !root.children.length);
++        while (loading() && Date.now() < deadline && !cancelled.has(data.id)) await delay(100);
++        if (cancelled.has(data.id) || data.expiresAt < Date.now()) throw new Error("\u64CD\u4F5C\u5DF2\u53D6\u6D88\u6216\u8FC7\u671F");
++        if (loading()) throw new Error("\u9875\u9762\u4ECD\u5728\u52A0\u8F7D\uFF0C\u8BF7\u7A0D\u540E\u91CD\u65B0 read");
++        const child = document.querySelector("iframe[data-studio-app]");
++        if (child) {
++          const origin = new URL(child.src, location.href).origin;
++          if (!isLocal(new URL(origin))) throw new Error("\u5DE5\u4F5C\u5BA4\u63A7\u5236\u4EC5\u652F\u6301\u672C\u673A\u5E94\u7528");
++          const forwarded = await new Promise((resolve, reject) => {
++            let sent = false;
++            const finish = (error, result) => {
++              clearInterval(probe);
++              clearTimeout(timer);
++              window.removeEventListener("message", receive);
++              error ? reject(error) : resolve(result);
++            };
++            const receive = (message) => {
++              if (message.source !== child.contentWindow || message.origin !== origin || message.data?.type !== resultType || message.data.id !== data.id) return;
++              if (message.data.ready && !sent) {
++                if (cancelled.has(data.id) || data.expiresAt < Date.now()) {
++                  finish(new Error("\u64CD\u4F5C\u5DF2\u53D6\u6D88\u6216\u8FC7\u671F"));
++                  return;
++                }
++                sent = true;
++                clearInterval(probe);
++                child.contentWindow?.postMessage(data, origin);
++              } else if (sent && !message.data.ready) finish(void 0, message.data);
++            };
++            window.addEventListener("message", receive);
++            const ping = () => child.contentWindow?.postMessage({ ...data, action: "ping" }, origin);
++            const probe = setInterval(ping, 150);
++            const timer = setTimeout(() => finish(new Error(sent ? "\u5E94\u7528\u54CD\u5E94\u8D85\u65F6\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u9875\u9762\u786E\u8BA4\u7ED3\u679C" : "\u5E94\u7528\u5C1A\u672A\u5C31\u7EEA\u6216\u672A\u5B89\u88C5\u63A7\u5236\u6865")), Math.max(1, Math.min(18e3, data.expiresAt - Date.now())));
++            ping();
++          });
++          window.parent.postMessage(forwarded, event.origin);
++        } else reply({ result: await perform(data) });
++      } catch (error) {
++        reply({ error: error instanceof Error ? error.message : "\u5DE5\u4F5C\u5BA4\u64CD\u4F5C\u5931\u8D25" });
++      } finally {
++        busy = false;
++      }
++    });
++  })();
++})();

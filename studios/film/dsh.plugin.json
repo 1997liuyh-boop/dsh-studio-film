@@ -1,0 +1,14 @@
+{
+  "name": "dsh-studio-film",
+  "version": "0.2.0",
+  "description": "PRINTFILM 原应用：剧本、分集、分镜、资产库与视频工作流",
+  "entry": {
+    "name": "dsh-studio-film",
+    "inject": [
+      "studioProjects"
+    ]
+  },
+  "client": {
+    "platform": "web"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/yi1108/printfilm",
+  "commit": "62f8d95d7ee6a5af9543351040e6183e9dcbbe65",
+  "license": "MIT",
+  "source": "通过 scripts/prepare-upstream.mjs 检出独立服务源码并应用 patches",
+  "adaptation": [
+    "patches/printfilm-studio.patch",
+    "patches/studioControl.js"
+  ],
+  "note": "后端源码、数据库和模型媒体供应商独立部署；本仓库包含工作室入口、会话适配和完整补丁，不包含运行数据。"
+}
