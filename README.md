@@ -1,18 +1,26 @@
-# dsh-studio-film
+# AI剧工作台
 
-PRINTFILM 原应用：剧本、分集、分镜、资产库与视频工作流
+独立的 PRINTFILM 适配工作室，把剧本、分集、分镜、资产库和视频制作流程接入 DSH。它使用自己的页面、宿主注册和适配补丁，不会把其他工作室的业务代码打包进来。
 
-本仓库根目录是可安装的 DSH 插件，版本 0.2.0。在插件市场添加本仓库 Git URL，安装后启用。先安装并启用 [工作室容器与共享运行时](https://github.com/1997liuyh-boop/dsh-studio-library)，再启用本插件。
+## 功能
 
-Git 安装使用已提交的 lib/ 与静态资源。开发时执行 npm install --include=dev --legacy-peer-deps、npm run build、npm run check；构建只使用本仓库源码与公开依赖，不引用相邻工作库。
+- 剧本管理：维护项目、故事、场景、角色和制作备注。
+- 分集与分镜：按集组织镜头、画面说明、对白、时长和制作状态。
+- 资产库：统一管理角色、场景、道具、图片、音频和视频素材。
+- 视频工作流：连接原应用的生成、预览、导出和任务状态；失败时保留任务信息和重试入口。
+- DSH 会话桥接：在工作室页面使用绑定会话进行创作，消息、模型、工具结果和停止操作保持一致。
+- 服务连接：服务未启动时显示明确的连接提示，不用静态示例替代真实项目数据。
 
-此插件连接原应用服务，服务与数据库需按下方说明单独配置；安装插件不会下载个人数据或自动安装上游应用。
+## 安装与服务
 
-## 功能与上游说明
+先安装 [工作室容器与共享运行时](https://github.com/1997liuyh-boop/dsh-studio-library)，再通过 dsh 插件管理器添加本仓库。原应用服务、数据库和视频生成服务需要单独安装和配置。
 
+需要 Node.js 22 及 npm。运行 `npm install --include=dev --legacy-peer-deps`、`npm run build`、`npm run check`。适配补丁位于 `patches/`，来源和锁定提交见 `UPSTREAM.json`。
 
-PRINTFILM 原应用：剧本、分集、分镜、资产库与视频工作流。本插件有独立的页面源码、宿主注册、构建与发布版本。
+## 限制
 
-从库根目录构建：`node scripts/build.mjs film`。依赖 dsh-worktable ^0.6.0 与 dsh-studio-projects ^0.5.0。
+安装插件不会下载个人项目、导入账号或自动启动外部生成服务；服务与数据库不可用时只能查看连接状态。第三方应用及素材按各自许可使用，完整通知见 `THIRD_PARTY_NOTICES.md`。
 
-来源及锁定提交见 [UPSTREAM.json](UPSTREAM.json)。后端保持独立运行，适配补丁在 patches，不能只安装卡片包就获得完整生成服务。
+## 更新已安装插件
+
+GitHub 代码提交不会自动更新 Desktop profile 中已经锁定的安装版本。请通过插件管理器重新安装本仓库来源；旧共享组合库的用户请先按[控制层迁移步骤](https://github.com/1997liuyh-boop/dsh-studio-library#更新与旧组合库迁移)保留现有子工作室，再移除旧组合库。工作室内升级需要已发布的适配安装包。
