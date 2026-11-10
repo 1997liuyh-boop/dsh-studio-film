@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "film",
+  "name": "AI剧工作台",
+  "icon": "🎬",
+  "description": "PRINTFILM 原应用：剧本、分集、分镜、资产库与视频工作流",
+  "order": 14,
+  "entry": "/studio-projects/film",
+  "capabilities": [],
+  "compatibility": {
+    "host": "0.2.1-rc.2",
+    "runtime": "^0.5.0",
+    "worktable": "^0.6.0"
+  }
+}
