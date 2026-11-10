@@ -1,26 +1,39 @@
-# AI剧工作台
+# dsh-studio-film
 
-独立的 PRINTFILM 适配工作室，把剧本、分集、分镜、资产库和视频制作流程接入 DSH。它使用自己的页面、宿主注册和适配补丁，不会把其他工作室的业务代码打包进来。
+[简体中文](README.zh.md)
 
-## 功能
+## Repository
 
-- 剧本管理：维护项目、故事、场景、角色和制作备注。
-- 分集与分镜：按集组织镜头、画面说明、对白、时长和制作状态。
-- 资产库：统一管理角色、场景、道具、图片、音频和视频素材。
-- 视频工作流：连接原应用的生成、预览、导出和任务状态；失败时保留任务信息和重试入口。
-- DSH 会话桥接：在工作室页面使用绑定会话进行创作，消息、模型、工具结果和停止操作保持一致。
-- 服务连接：服务未启动时显示明确的连接提示，不用静态示例替代真实项目数据。
+- Repository name: `dsh-studio-film`
+- Repository description: PRINTFILM studio adapter for scripts, episodes, storyboards, asset management and video production tasks.
+- Source: `https://github.com/1997liuyh-boop/dsh-studio-film`
+- Upstream: `https://github.com/yi1108/printfilm`, locked in `UPSTREAM.json`.
 
-## 安装与服务
+## Features
 
-先安装 [工作室容器与共享运行时](https://github.com/1997liuyh-boop/dsh-studio-library)，再通过 dsh 插件管理器添加本仓库。原应用服务、数据库和视频生成服务需要单独安装和配置。
+- Manage projects, stories, scenes, characters and production notes.
+- Organize episodes and shots with image direction, dialogue, duration and status.
+- Manage character, scene, prop, image, audio and video assets.
+- Bridge the original application's generation, preview, export and task status into DSH.
+- Use a bound DSH session for messages, model state, tool results and stop operations.
+- Show real service and database failures with a retry path; no sample data is presented as connected.
 
-需要 Node.js 22 及 npm。运行 `npm install --include=dev --legacy-peer-deps`、`npm run build`、`npm run check`。适配补丁位于 `patches/`，来源和锁定提交见 `UPSTREAM.json`。
+## Installation
 
-## 限制
+Install the control bundle, then this exact studio tag through the official Desktop plugin manager after fully quitting Desktop:
 
-安装插件不会下载个人项目、导入账号或自动启动外部生成服务；服务与数据库不可用时只能查看连接状态。第三方应用及素材按各自许可使用，完整通知见 `THIRD_PARTY_NOTICES.md`。
+```powershell
+& "<Desktop install directory>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "github:1997liuyh-boop/dsh-studio-library#v0.1.3"
+& "<Desktop install directory>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add "github:1997liuyh-boop/dsh-studio-film#v0.2.2"
+& "<Desktop install directory>\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop list
+```
 
-## 更新已安装插件
+Verify `main: lib/index.js`, `exports./client: lib/client.js`, `dsh.bundle.patch: ./cordis.patch.yml` and the built `static` entry. Install and configure the PRINTFILM service, database and video-generation service separately, then restart Desktop.
 
-GitHub 代码提交不会自动更新 Desktop profile 中已经锁定的安装版本。请通过插件管理器重新安装本仓库来源；旧共享组合库的用户请先按[控制层迁移步骤](https://github.com/1997liuyh-boop/dsh-studio-library#更新与旧组合库迁移)保留现有子工作室，再移除旧组合库。工作室内升级需要已发布的适配安装包。
+## Requirements and limits
+
+The adapter does not download personal projects, import accounts or start external services. Service and database failures limit the studio to status and retry views. Third-party applications and assets keep their own licenses; see `THIRD_PARTY_NOTICES.md`.
+
+## License and sources
+
+MIT licensed. The upstream source, locked revision and adaptation patches are recorded in `UPSTREAM.json` and `patches/`.
