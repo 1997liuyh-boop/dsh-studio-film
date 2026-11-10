@@ -30,6 +30,16 @@
 
 验证安装包包含 `main: lib/index.js`、`exports./client: lib/client.js`、`dsh.bundle.patch: ./cordis.patch.yml` 和已构建的 `static` 入口。另行安装并配置 PRINTFILM 服务、数据库和视频生成服务，随后重启 Desktop。
 
+### 服务配置
+
+插件不包含 PRINTFILM 服务。请先在新的绝对目录准备固定版本的上游源码，再按上游项目文档安装依赖并启动服务：
+
+```powershell
+node scripts/prepare-upstream.mjs film "C:\work\printfilm"
+```
+
+在 DSH 宿主配置 `printfilmUrl`，或设置 `DSH_STUDIO_PRINTFILM_URL` 为服务来源地址。默认地址为 `http://127.0.0.1:33102`；打开工作室前必须启动上游服务、数据库和视频生成服务。
+
 ## 要求与限制
 
 适配包不会下载个人项目、导入账号或启动外部服务。服务和数据库不可用时只能查看状态并重试。第三方应用和素材遵循各自许可，详见 `THIRD_PARTY_NOTICES.md`。

@@ -30,6 +30,16 @@ Install the control bundle, then this exact studio tag through the official Desk
 
 Verify `main: lib/index.js`, `exports./client: lib/client.js`, `dsh.bundle.patch: ./cordis.patch.yml` and the built `static` entry. Install and configure the PRINTFILM service, database and video-generation service separately, then restart Desktop.
 
+### Service setup
+
+The plugin does not ship the PRINTFILM service. Prepare the pinned upstream source in a new absolute directory, then follow its own documentation to install dependencies and start the service:
+
+```powershell
+node scripts/prepare-upstream.mjs film "C:\work\printfilm"
+```
+
+Configure the DSH host with `printfilmUrl`, or set `DSH_STUDIO_PRINTFILM_URL` to the service origin. The default origin is `http://127.0.0.1:33102`; the upstream service, database and video-generation provider must be running before opening the studio.
+
 ## Requirements and limits
 
 The adapter does not download personal projects, import accounts or start external services. Service and database failures limit the studio to status and retry views. Third-party applications and assets keep their own licenses; see `THIRD_PARTY_NOTICES.md`.
