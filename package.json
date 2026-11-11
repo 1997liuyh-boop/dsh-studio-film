@@ -1,6 +1,6 @@
 {
   "name": "dsh-studio-film",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "PRINTFILM 原应用：剧本、分集、分镜、资产库与视频工作流",
   "type": "module",
   "license": "MIT",
@@ -12,7 +12,8 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
@@ -29,7 +30,8 @@
     "UPSTREAM.json",
     "THIRD_PARTY_NOTICES.md",
     "UPSTREAM-LICENSE",
-    "scripts/start.ps1"
+    "scripts/start.ps1",
+    "locale"
   ],
   "dsh": {
     "bundle": {
