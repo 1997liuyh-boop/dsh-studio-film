@@ -38,7 +38,28 @@ The plugin does not ship the PRINTFILM service. Prepare the pinned upstream sour
 node scripts/prepare-upstream.mjs film "C:\work\printfilm"
 ```
 
-Configure the DSH host with `printfilmUrl`, or set `DSH_STUDIO_PRINTFILM_URL` to the service origin. The default origin is `http://127.0.0.1:33102`; the upstream service, database and video-generation provider must be running before opening the studio.
+Configure the DSH host with `printfilmUrl`, or set `DSH_STUDIO_PRINTFILM_URL` to the service origin. The default origin is `http://127.0.0.1:33102`.
+
+#### Started by the studio library (recommended)
+
+PRINTFILM needs PostgreSQL, a Garnet cache, a Python backend and two web servers, so it cannot ship inside the plugin. Once the app, its runtimes and data are prepared locally, tell the studio library where they are in the profile's `cordis.patch.yml`; it then starts the whole stack itself (`dsh-studio-library` 0.1.20 or later), with no PowerShell start script:
+
+```yaml
+- id: dsh-studio-projects
+  config:
+    printfilmService:
+      appDirectory: D:/studio-apps/printfilm      # upstream source: backend, frontend/dist, admin/dist, .venv
+      runtimeDirectory: D:/studio-runtime         # pgsql, garnet, dotnet, node, ffmpeg
+      dataDirectory: D:/studio-data/printfilm     # runtime.json (databasePassword, secretKey), postgres, garnet
+```
+
+The environment variables `DSH_STUDIO_PRINTFILM_APP`, `DSH_STUDIO_PRINTFILM_RUNTIME` and `DSH_STUDIO_PRINTFILM_DATA` work as well. With that in place:
+
+- The stack starts when the studio is installed or enabled. The console studio list shows the connection state, offers a Start button when offline and shows the failure reason on that row (missing file, port in use, process exit with the last error-log line).
+- Start order: database (35432) → cache (36379) → backend API (33104) → web (33102) → admin (33103). Ports that are already listening are reused; only the missing parts are started.
+- Logs are written to `dataDirectory/logs`. Quitting Desktop does not stop the running services.
+
+Without these three directories the studio library starts nothing and the console shows "no start script configured"; start the upstream service, database and video-generation provider yourself before opening the studio.
 
 ## Requirements and limits
 

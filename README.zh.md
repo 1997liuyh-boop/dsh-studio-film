@@ -38,7 +38,28 @@
 node scripts/prepare-upstream.mjs film "C:\work\printfilm"
 ```
 
-在 DSH 宿主配置 `printfilmUrl`，或设置 `DSH_STUDIO_PRINTFILM_URL` 为服务来源地址。默认地址为 `http://127.0.0.1:33102`；打开工作室前必须启动上游服务、数据库和视频生成服务。
+在 DSH 宿主配置 `printfilmUrl`，或设置 `DSH_STUDIO_PRINTFILM_URL` 为服务来源地址。默认地址为 `http://127.0.0.1:33102`。
+
+#### 由工作室库自动启动（推荐）
+
+PRINTFILM 依赖 PostgreSQL、Garnet 缓存、Python 后端和两个页面服务，无法随插件分发。应用、专用运行时和数据在本机准备好之后，在 profile 的 `cordis.patch.yml` 里告诉工作室库这三个目录，之后由它直接拉起整套服务（`dsh-studio-library` 0.1.20 及以上），不需要 PowerShell 启动脚本：
+
+```yaml
+- id: dsh-studio-projects
+  config:
+    printfilmService:
+      appDirectory: D:/studio-apps/printfilm      # 上游源码：backend、frontend/dist、admin/dist、.venv
+      runtimeDirectory: D:/studio-runtime         # pgsql、garnet、dotnet、node、ffmpeg
+      dataDirectory: D:/studio-data/printfilm     # runtime.json（databasePassword、secretKey）、postgres、garnet
+```
+
+也可以用环境变量 `DSH_STUDIO_PRINTFILM_APP`、`DSH_STUDIO_PRINTFILM_RUNTIME`、`DSH_STUDIO_PRINTFILM_DATA`。配置后：
+
+- 工作室安装或启用时自动启动；控制台的工作室列表显示连接状态，未连接时可点「启动」，失败原因（缺少文件、端口被占用、进程退出及错误日志最后一行）直接显示在该行。
+- 启动顺序为数据库（35432）→ 缓存（36379）→ 后端接口（33104）→ 前台（33102）→ 管理后台（33103）；已经在监听的端口直接沿用，只补缺的部分。
+- 日志在 `dataDirectory/logs`。退出 Desktop 不会停止已运行的服务。
+
+没有配置这三个目录时，工作室库不会启动任何服务，控制台显示「未配置启动脚本」，打开工作室前需要自行启动上游服务、数据库和视频生成服务。
 
 ## 要求与限制
 
